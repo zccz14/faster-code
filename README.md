@@ -16,8 +16,8 @@ The skill is intentionally domain-neutral. It does not assume any specific field
 ## Contents
 
 ```text
-faster-code/
-└── SKILL.md
+README.md
+SKILL.md
 ```
 
 ## Scope
