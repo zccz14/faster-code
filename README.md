@@ -9,6 +9,7 @@ It teaches an agent to:
 - collect 3-5 `N-T` samples before extrapolating;
 - estimate whether the target scale is likely to finish within budget;
 - stop early when the estimate is unacceptable;
+- prioritize removing wasted work before using more compute to reduce wall-clock time;
 - use existing profilers only after the go/no-go gate fails;
 - preserve slow-version canonical output before replacing it with optimized code.
 

@@ -1,6 +1,6 @@
 ---
 name: faster-code
-description: Use this skill whenever code is slow, times out, gets killed, burns substantial CPU, runs long batch jobs, performs parameter scans, trains models, processes large datasets, runs simulations, or has unknown target-scale runtime. It guides progressive runtime probing, online N-T progress instrumentation when feasible, fixed-timeout sampling, N-T scaling estimation, and full-run go/no-go decisions before attempting target scale. If optimization happens, it requires preserving slow-version canonical output and proving the faster version is byte-for-byte identical after pre-write normalization such as rounding or formatting. This skill does not wrap profiler tools and does not provide generic optimization recipes; it decides whether to run full scale, stop, or move into profiling and optimization.
+description: Use this skill whenever code is slow, times out, gets killed, burns substantial CPU, runs long batch jobs, performs parameter scans, trains models, processes large datasets, runs simulations, or has unknown target-scale runtime. It guides progressive runtime probing, online N-T progress instrumentation when feasible, fixed-timeout sampling, N-T scaling estimation, and full-run go/no-go decisions before attempting target scale. If optimization happens, it requires preserving slow-version canonical output, proving byte-for-byte semantic equivalence, and prioritizing removal of wasted work before spending more CPU through parallelism. This skill does not wrap profiler tools and does not provide generic optimization recipes; it decides whether to run full scale, stop, or move into profiling and principled optimization.
 ---
 
 # faster-code
@@ -18,6 +18,8 @@ Turn “can this finish at full scale?” into a pre-run gate:
 5. If the estimate is unacceptable, do not run full scale; move to profiling, diagnosis, or optimization.
 
 If code is optimized, add a semantic gate: preserve canonical output from the slow version as the ground truth, then require the faster version to produce byte-for-byte identical canonical output on the same input slice. If floating-point differences are natural, normalize values before writing canonical output using a predeclared rounding or formatting rule. It is acceptable to lose limited precision for auditability, but the final comparison must still be byte-for-byte.
+
+Optimization has a priority order: avoid wasted computation before spending more computation. Reducing unnecessary work is usually better than hiding waste behind more cores. Parallelism can be useful, but treat it as a late option when algorithmic or workload reductions are unavailable, too risky, or insufficient for the runtime budget.
 
 ## Online N-T First
 
@@ -236,6 +238,27 @@ Additional failure conditions after optimization:
 - Rounding or formatting rules were changed after seeing differences.
 - Only aggregate metrics are similar while important per-item outputs drift.
 
+## Optimization Priority
+
+This skill does not prescribe fixed optimization recipes because workloads vary. It does prescribe an optimization order of operations: save compute first, then save wall-clock time.
+
+When optimization is needed, prefer changes that reduce total work:
+
+- remove repeated, redundant, or unused computation;
+- avoid unnecessary scans, joins, sorts, conversions, serialization, network calls, or disk I/O;
+- cache or precompute only when it reduces net work and does not create stale or memory-heavy behavior;
+- change data structures or algorithms when sampling, profiling, or code inspection shows avoidable growth;
+- narrow the workload using correct filters, early exits, deduplication, batching, pruning, or incremental processing.
+
+Use parallelism only after checking for wasted work. More workers can reduce elapsed time while increasing total CPU, memory pressure, I/O contention, and operational cost. It is appropriate when:
+
+- the remaining work is necessary and independent;
+- algorithmic/workload reductions have been exhausted or are too risky for the task;
+- the bottleneck is not already memory, disk, network, lock contention, or rate limits;
+- semantic equivalence and bounded `N-T` sampling still pass under the parallel version.
+
+Do not present multiprocessing, multithreading, GPU use, larger machines, or more shards as the first fix unless evidence shows the work is already necessary, well-partitioned, and not waste-dominated.
+
 ## Profiler Guidance
 
 This skill does not wrap or prescribe profiler tools. However, when the gate returns `FAIL` or `INCONCLUSIVE`, especially for high complexity, declining throughput, suspected memory bottlenecks, or unstable samples, tell the user to use the existing profiler or hotspot audit tool appropriate for the project and language.
@@ -286,6 +309,7 @@ Canonical Check, if optimized code was created:
 Decision:
 - conclusion:
 - reason:
+- optimization_priority, if optimized:
 - next_step:
 ```
 
@@ -296,6 +320,7 @@ This skill does not:
 - wrap profiler tools;
 - provide generic optimization recipes;
 - automatically rewrite algorithms;
+- prefer parallelism before checking for wasted work;
 - prove estimates are exact;
 - encourage full-scale runs when evidence is insufficient.
 
