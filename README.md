@@ -5,6 +5,7 @@
 It teaches an agent to:
 
 - probe runtime progressively with bounded timeouts;
+- add online `N-T` progress instrumentation before sliced probes when a natural work counter exists;
 - collect 3-5 `N-T` samples before extrapolating;
 - estimate whether the target scale is likely to finish within budget;
 - stop early when the estimate is unacceptable;

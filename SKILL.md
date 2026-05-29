@@ -1,6 +1,6 @@
 ---
 name: faster-code
-description: Use this skill whenever code is slow, times out, gets killed, burns substantial CPU, runs long batch jobs, performs parameter scans, trains models, processes large datasets, runs simulations, or has unknown target-scale runtime. It guides progressive runtime probing, fixed-timeout sampling, N-T scaling estimation, and full-run go/no-go decisions before attempting target scale. If optimization happens, it requires preserving slow-version canonical output and proving the faster version is byte-for-byte identical after pre-write normalization such as rounding or formatting. This skill does not wrap profiler tools and does not provide generic optimization recipes; it decides whether to run full scale, stop, or move into profiling and optimization.
+description: Use this skill whenever code is slow, times out, gets killed, burns substantial CPU, runs long batch jobs, performs parameter scans, trains models, processes large datasets, runs simulations, or has unknown target-scale runtime. It guides progressive runtime probing, online N-T progress instrumentation when feasible, fixed-timeout sampling, N-T scaling estimation, and full-run go/no-go decisions before attempting target scale. If optimization happens, it requires preserving slow-version canonical output and proving the faster version is byte-for-byte identical after pre-write normalization such as rounding or formatting. This skill does not wrap profiler tools and does not provide generic optimization recipes; it decides whether to run full scale, stop, or move into profiling and optimization.
 ---
 
 # faster-code
@@ -12,17 +12,53 @@ Use this skill to improve how compute-heavy code is run: first decide whether th
 Turn “can this finish at full scale?” into a pre-run gate:
 
 1. Define the target scale `N_full` and acceptable runtime budget `T_budget`.
-2. Build 3-5 valid `N-T` samples using short timeouts, progress logs, or sliced inputs.
-3. Estimate target-scale runtime with multiple simple models.
-4. If the estimate is unacceptable, do not run full scale; move to profiling, diagnosis, or optimization.
+2. Prefer online `N-T` progress instrumentation when the program has a natural work counter and source edits are cheap.
+3. Build 3-5 valid `N-T` samples using short timeouts, progress logs, or sliced inputs.
+4. Estimate target-scale runtime with multiple simple models.
+5. If the estimate is unacceptable, do not run full scale; move to profiling, diagnosis, or optimization.
 
 If code is optimized, add a semantic gate: preserve canonical output from the slow version as the ground truth, then require the faster version to produce byte-for-byte identical canonical output on the same input slice. If floating-point differences are natural, normalize values before writing canonical output using a predeclared rounding or formatting rule. It is acceptable to lose limited precision for auditability, but the final comparison must still be byte-for-byte.
+
+## Online N-T First
+
+Before choosing sliced batch runs, inspect the program for a natural progress counter. Many slow programs already have a loop over rows, files, tasks, parameter combinations, batches, epochs, windows, or requests. If that counter exists and editing the code is low risk, add online `N-T` progress logging first, then run one bounded probe.
+
+Treat missing progress logs as a fixable instrumentation gap, not as proof that the program is batch-only.
+
+Add online sampling when all of these are true:
+
+- there is a monotonic processed-work counter or one can be computed cheaply;
+- the counter maps to the chosen `N` or a defensible combined `N`;
+- logs can be emitted every 5-10 seconds or every coarse work interval without material overhead;
+- source edits are acceptable for this task and do not change computation semantics;
+- the program can flush logs before a timeout kills it.
+
+Do not add online sampling when any of these are true:
+
+- the only available counter would require expensive synchronization, global scans, or large memory changes;
+- logging would materially perturb the workload being measured;
+- the code cannot be safely edited in the current task;
+- the work is genuinely all-or-nothing and exposes no meaningful partial progress.
+
+Instrumentation should be minimal and parseable. Prefer one stable line shape:
+
+```text
+PERF_PROGRESS processed=120000 total=1000000 elapsed_sec=31.2 rate=3846.1 unit=rows
+```
+
+For nested work, log the combined `N` explicitly instead of hiding a second scale variable:
+
+```text
+PERF_PROGRESS processed=240000 total=2000000 elapsed_sec=31.2 unit=row_param_pairs rows=120000 params=2
+```
+
+If online instrumentation is feasible, implement it before running repeated sliced probes. If it is not feasible, state the reason in the report under `instrumentation_decision`.
 
 ## Classify the Program
 
 ### A. Progress-Observable Programs
 
-If the program can print progress while running, prefer one short timeout probe instead of many sliced runs.
+If the program can print progress while running, or can be cheaply changed to do so, prefer one short timeout probe instead of many sliced runs.
 
 Useful progress logs are stable, low-frequency, and parseable:
 
@@ -37,11 +73,11 @@ Procedure:
 3. Treat a timeout-killed run as useful if progress logs were captured.
 4. If throughput declines over time, extrapolate conservatively; do not extrapolate from the fastest early rate.
 
-If modifying the program is cheap, add progress logging before doing repeated sliced runs. Log every 5-10 seconds, not for every item.
+If progress logging is absent but the online N-T criteria are met, add it before doing repeated sliced runs. Log every 5-10 seconds, not for every item.
 
 ### B. Batch-Only Programs
 
-If the program only reports completion after the whole algorithm finishes, use sliced data and repeated bounded runs.
+Use sliced data and repeated bounded runs only when online N-T instrumentation is unavailable, unsafe, or would distort the measurement.
 
 Procedure:
 
@@ -228,6 +264,7 @@ Target:
 Program Type:
 - progress_observable | batch_only
 - sampling_method:
+- instrumentation_decision:
 
 Samples:
 | N | runtime_sec | status | timeout_sec | notes |
